@@ -56,6 +56,62 @@ def forward(self, x):
     x = self.embed(x)
     x = self.encoder(x)
     x = self.search_layer(x)
-"""
+
     return x
-"""
+    """
+class BatchSearchLayer(nn.Module):
+    def __init__(self, k=5):
+        super().__init__()
+        self.k = k
+
+    def forward(self, x, y):
+        B, C, H, W = x.shape
+        x = x.view(B, -1)
+        x = F.normalize(x, dim=-1)
+        # compute cosine similarity with all the other images in the batch
+        sim = torch.matmul(x, x.transpose(1,0))
+        diag = sim.diag().view(B,1)
+        D = diag.expand_as(sim)
+        S = (D + D.transpose(1,0) - 2*sim)
+        # get top k similar image indices
+        topk_indices = torch.topk(S, self.k, dim=-1, largest=False, sorted=True)[1]
+        # gather values from x and y at top k similar image indices
+        topk_images = x[topk_indices]
+        topk_targets = y[topk_indices]
+        # compute the mean of the top k similar images and targets
+        mean_topk_images = topk_images.mean(dim=0)
+        mean_topk_targets = topk_targets.mean(dim=0)
+        # compute the loss between the original input and the mean of the top k similar images
+        loss = F.cross_entropy(x, mean_topk_targets)
+        return loss
+        
+ class GaussianDiffusionSearchLayer(nn.Module):
+    def __init__(self, k=5, sigma=1):
+        super().__init__()
+        self.k = k
+        self.sigma = sigma
+        self.gaussian_filter = torch.tensor(
+            [[1 / 16, 1 / 8, 1 / 16], [1 / 8, 1 / 4, 1 / 8], [1 / 16, 1 / 8, 1 / 16]], dtype=torch.float
+        )
+
+    def forward(self, x, y):
+        B, C, H, W = x.shape
+        x = x.view(B, -1)
+        x = F.normalize(x, dim=-1)
+        # denoise image using Gaussian Diffusion
+        x = F.conv2d(x, self.gaussian_filter, padding=1)
+        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
+        x = x.view(B, C, H*W)
+        # compute the SVD of the denoised image
+        u, s, vh = torch.svd(x)
+        # get top k similar image indices
+        topk_indices = torch.topk(s, self.k, dim=-1, largest=True, sorted=True)[1]
+        # gather values from x and y at top k similar image indices
+        topk_images = u[:, topk_indices]
+        topk_targets = y[topk_indices]
+        # compute the mean of the top k similar images and targets
+        mean_topk_images = topk_images.mean(dim=0)
+        mean_topk_targets = topk_targets.mean(dim=0)
+        # compute the loss between the original input and the mean of the top k similar images
+        loss = F.cross_entropy(x, mean_topk_targets)
+        return loss
