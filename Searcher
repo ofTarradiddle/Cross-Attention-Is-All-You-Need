@@ -1,0 +1,61 @@
+class SearchLayer(nn.Module):
+    """This code defines a SearchLayer class, which inherits from PyTorch's nn.Module class. The __init__ method initializes the layer with the number of input and output channels, the radius of the square window to use for the search, and the number of similar pixels to gather (k). The forward method takes in an input tensor and applies the following operations:
+
+    reshape the input tensor to (batch_size, channels, H*W)
+    applies average pooling to get the mean of each channel
+    normalize the tensor
+    create a "search window" of size (2radius+1)x(2radius+1)
+    compute cosine similarity with the center pixel of each window
+    get top k similar pixels indices
+    gather values from x at top k similar pixel indices
+    pool together the top k similar pixels
+    concatenate pooled top k pixels with the input
+    return the concatenated output
+    """
+    def __init__(self, in_channels, out_channels, radius, k=5):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.radius = radius
+        self.k = k
+        self.pool = nn.AdaptiveAvgPool2d(1)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        x = x.view(B, C, -1)
+        x = self.pool(x).squeeze(-1)
+        x = F.normalize(x, dim=-1)
+        
+        # create a "search window" of size (2*radius+1)x(2*radius+1)
+        search_window = x[:, :, None, None, :].expand(-1, -1, 2*self.radius+1, 2*self.radius+1, -1)
+        search_window = search_window.contiguous().view(B, C, -1, self.in_channels)
+        
+        # compute cosine similarity with the center pixel of each window
+        sim = search_window @ x[:, :, :, None]
+        sim = sim.view(B, C, -1, 2*self.radius+1, 2*self.radius+1)
+        
+        # get top k similar pixels indices
+        topk_indices = torch.topk(sim, self.k, dim=-1, largest=True, sorted=True)[1]
+        
+        # gather values from x at top k similar pixel indices
+        topk_pixels = x[:, :, topk_indices]
+        
+        # pool together the top k similar pixels
+        pooled_topk = topk_pixels.mean(dim=-1)
+        
+        # concatenate pooled top k pixels with the input
+        out = torch.cat([x, pooled_topk], dim=1)
+        return out 
+        
+"""
+model = VisionTransformer(dim=512, num_heads=8, num_layers=6)
+...
+search_layer = SearchLayer(in_channels=512, out_channels=512, radius=2, k=5)
+...
+def forward(self, x):
+    x = self.embed(x)
+    x = self.encoder(x)
+    x = self.search_layer(x)
+"""
+    return x
+"""
